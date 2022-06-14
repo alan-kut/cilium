@@ -6,6 +6,21 @@
 
 #include "dbg.h"
 
+#define LOCAL_CLUSTER_IDENTITY_RANGE_START 1
+#define LOCAL_CLUSTER_IDENTITY_RANGE_END   ((1 << 16) - 1)
+#define MULTI_CLUSTER_IDENTITY_RANGE_START (1 << 16)
+#define MULTI_CLUSTER_IDENTITY_RANGE_END   ((1 << 24) - 1)
+#define CIDR_IDENTITY_RANGE_START          (1 << 24)
+#define CIDR_IDENTITY_RANGE_END            ((1 << 24) + (1 << 16) - 1)
+
+#define SCOPE_LOCAL_CLUSTER 0
+#define SCOPE_MULTI_CLUSTER 1
+
+static __always_inline bool identity_in_range(__u32 identity, __u32 range_start, __u32 range_end)
+{
+	return range_start <= identity && identity <= range_end;
+}
+
 static __always_inline bool identity_is_remote_node(__u32 identity)
 {
 	/* KUBE_APISERVER_NODE_ID is the reserved identity that corresponds to
@@ -52,6 +67,49 @@ static __always_inline bool identity_is_node(__u32 identity)
 static __always_inline bool identity_is_reserved(__u32 identity)
 {
 	return identity < UNMANAGED_ID || identity_is_remote_node(identity);
+}
+
+/**
+ * identity_is_cluster is used to determine whether an identity is assigned to
+ * an entity inside the cluster.
+ *
+ * In addition to the identity, the function takes a scope parameter which can
+ * be either SCOPE_LOCAL_CLUSTER or SCOPE_MULTI_CLUSTER and is used to specify
+ * if a cluster identity outside the local cluster should be still considered a
+ * cluster identity.
+ *
+ * This function will return false for:
+ * - ReservedIdentityWorld
+ * - an identity in the CIDR range
+ * - identities belonging to a different cluster in case the scope is set to
+ *   SCOPE_LOCAL_CLUSTER
+ *
+ * For all other identities, including the following reserved ones:
+ * - ReservedIdentityHost
+ * - ReservedIdentityUnmanaged
+ * - ReservedIdentityHealth
+ * - ReservedIdentityInit
+ * - ReservedIdentityRemoteNode
+ * - ReservedIdentityKubeAPIServer
+ * - ReservedIdentityIngress
+ *
+ * it will return true.
+ */
+static __always_inline bool identity_is_cluster(__u32 identity, __u8 scope)
+{
+	if (identity == WORLD_ID)
+		return false;
+
+	if (identity_in_range(identity, CIDR_IDENTITY_RANGE_START,
+			      CIDR_IDENTITY_RANGE_END))
+		return false;
+
+	if (scope == SCOPE_LOCAL_CLUSTER &&
+	    identity_in_range(identity, MULTI_CLUSTER_IDENTITY_RANGE_START,
+			      MULTI_CLUSTER_IDENTITY_RANGE_START))
+		return false;
+
+	return true;
 }
 
 #if __ctx_is == __ctx_skb
